@@ -1,6 +1,5 @@
-from fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP
 
-import os
 from bs4 import BeautifulSoup, Tag
 from pathlib import Path
 from bs4 import XMLParsedAsHTMLWarning
@@ -15,7 +14,7 @@ from datas.report import SingleJavaFileReport, MissCover, BaseReport, SingleJava
 
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 
-mcp = FastMCP('TestReport', port = 12000)
+mcp = FastMCP('TestReport')
 
 def list2json(list : list[SingleJavaFileReport]):
     json = '['
@@ -26,20 +25,21 @@ def list2json(list : list[SingleJavaFileReport]):
     json += ']'
     return json
 
-def readFile(path : Path, type : str) -> BeautifulSoup:
-    with path.open('r') as file:
+def readFile(path : str, type : str) -> BeautifulSoup:
+    content = ''
+    with open(path, 'r') as file:
         content = file.read()
     
     mode = 'lxml' if type == 'xml' else 'html.parser'
     return BeautifulSoup(content, mode)
 
 def findPitestDir(path : str) -> str:
-    dirs = [item for item in os.listdir(Path(path) / 'target' / 'pit-reports')]
+    dirs = [item for item in os.listdir(path + (Path('target') / 'pit-reports'))]
     dirs.sort()
     return dirs[-1]
 
 def getProjectName(path : str) -> str:
-    return path.split('\\' if os.name == 'nt' else '/')[-1]
+    return path.split('\\')[-1]
 
 @mcp.tool('getTestReportOverview')
 def overview(path : str = Field(..., description="The absolute path of the project's root directory")) -> str:
@@ -53,8 +53,9 @@ def overview(path : str = Field(..., description="The absolute path of the proje
     '''
     
     try:
-        pitestSoup = readFile(Path(path) / 'target' / 'pit-reports' / f'{findPitestDir(path)}' / 'net.mooctest' / 'index.html', 'html')
-        jacocoSoup = readFile(Path(path) / 'target' / 'site' / 'jacoco' / 'jacoco.xml', 'xml')
+        #Path('target') / 'pit-reports' / f'{findPitestDir(path)}' / 'index.html'
+        pitestSoup = readFile(path + r'\target\pit-reports\{}\index.html'.format(findPitestDir(path)), 'html')
+        jacocoSoup = readFile(path + r'\target\site\jacoco\jacoco.xml', 'xml')
     except FileNotFoundError:
         return 'No pitest or jacoco report found'
     except Exception as e:
@@ -65,30 +66,20 @@ def overview(path : str = Field(..., description="The absolute path of the proje
     branchCoverd = int(branch.attrs['covered'])
     branchTotal = branchMiss + branchCoverd
 
-    fit = lambda x: x is not None and x.attrs['missed'] != '0'
-
-    branchClasses = jacocoSoup.select('report > package > class')
-    uncoveredBranchClasses = [clazz.attrs['name'].split('/')[-1] for clazz in branchClasses if fit(clazz.select_one('class > counter[type=BRANCH]'))]
-
-    mutation = pitestSoup.select_one('table > tbody > tr > td:last-child > div > div[class="coverage_ledgend"]')
+    mutation = pitestSoup.select_one('h1 + h3 + table > tbody > tr > td:last-child > div > div[class="coverage_ledgend"]')
     mutationCovered, mutationTotal= [int(i) for i in mutation.text.split('/')]
     mutationMissed = mutationTotal - mutationCovered
-
-    mutationClassesRow = pitestSoup.select('table + h3 + table > tbody > tr')
-    mutationClasses = [row.select_one('td:first-child > a').text.replace('.java', '') for row in mutationClassesRow if row.select_one('td:last-child > div[class="coveragePercentage"]').text.replace(' ', '') != '100%']
 
     result = f'''{getProjectName(path)}: {'{'}
     branch coverage: {branchCoverd / branchTotal if branchTotal != 0 else 1:.2%},
     total branches: {branchTotal},
     branch covered: {branchCoverd},
     branch missed: {branchMiss},
-    uncoverd branches classes: {uncoveredBranchClasses},
 
     mutation coverage: {mutationCovered / mutationTotal if mutationTotal != 0 else 1:.2%},
     total mutations: {mutationTotal}
     mutation covered: {mutationCovered},
-    mutation missed: {mutationMissed},
-    uncovered mutations classes: {mutationClasses}
+    mutation missed: {mutationMissed}
 {'}'}'''
 
     return result
@@ -110,8 +101,7 @@ def mutationTestReport(path : str = Field(..., description="The absolute path of
     targetDir = findPitestDir(path)
 
     try:
-        
-        pitestSoup = readFile(Path(path) / 'target' / 'pit-reports' / targetDir / 'net.mooctest' / 'index.html', 'html')
+        pitestSoup = readFile(f'{path}\\target\\pit-reports\\{targetDir}\\net.mooctest\\index.html', 'html')
     except FileNotFoundError:
         return 'No pitest report found'
     except Exception:
@@ -126,7 +116,8 @@ def mutationTestReport(path : str = Field(..., description="The absolute path of
     
     cover, total = [int(i) for i in tr_target.select('div.coverage_ledgend')[-1].text.split('/')]
 
-    pitestSoup = readFile(Path(path) / 'target' / 'pit-reports' / targetDir / 'net.mooctest' / f'{className}.java.html', 'html')
+
+    pitestSoup = readFile(f'{path}\\target\\pit-reports\\{targetDir}\\net.mooctest\\{className}.java.html', 'html')
     survived_mutations = pitestSoup.select('table tr:has(td:last-child:-soup-contains("Mutations")) ~ tr')
     survived_mutations = [each for each in survived_mutations if each.find('p', {'class': 'SURVIVED'})] + [each for each in survived_mutations if each.find('p', {'class': 'NO_COVERAGE'})]
     
@@ -157,7 +148,7 @@ def branchTestReport(path : str = Field(..., description="The absolute path of t
     '''
     
     try:
-        jacocoSoup = readFile(Path(path) / 'target' / 'site' / 'jacoco' / 'jacoco.xml', 'xml')
+        jacocoSoup = readFile(path + r'\target\site\jacoco\jacoco.xml', 'xml')
     except FileNotFoundError:
         return 'No jacoco report found'
     except Exception:
@@ -193,7 +184,7 @@ def branchTestReport(path : str = Field(..., description="The absolute path of t
 
 
 def main():
-    mcp.run(transport='http')
+    mcp.run(transport='stdio')
 
     
 
